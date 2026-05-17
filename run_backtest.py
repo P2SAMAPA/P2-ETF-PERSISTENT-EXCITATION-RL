@@ -7,8 +7,8 @@ def main():
     cum_returns, daily_returns, model, dates = run_backtest()
     
     # Convert to DataFrames with datetime index
-    cum_df = pd.Series(cum_returns, index=dates, name="strategy").to_frame()
-    daily_df = pd.Series(daily_returns, index=dates, name="strategy_return").to_frame()
+    cum_df = pd.DataFrame({'strategy': cum_returns}, index=dates)
+    daily_df = pd.DataFrame({'strategy_return': daily_returns}, index=dates)
     
     results = {
         "cumulative_returns": cum_df,

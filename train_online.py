@@ -2,7 +2,7 @@ import numpy as np
 from pe_actor_critic import PE_ActorCritic
 from persistent_excitation import PersistentExcitation
 from lyapunov import LyapunovMonitor
-from config import STATE_DIM, ACTION_DIM, PE_LAMBDA_MIN, PE_ADAPTIVE, PE_COV_WINDOW
+from config import PE_ADAPTIVE, BATCH_SIZE
 
 def online_training(env, actor_critic, pe, lyap, epochs=10, batch_size=32):
     """Run online training loop with PE and Lyapunov checks."""
@@ -28,7 +28,6 @@ def online_training(env, actor_critic, pe, lyap, epochs=10, batch_size=32):
             stable, delta = lyap.update(params)
             if not stable:
                 print(f"Lyapunov violation at step {epoch}, delta={delta:.4f}")
-                # Could revert or reduce learning rate
             state = next_state
             total_reward += reward
         print(f"Epoch {epoch}: total reward {total_reward:.2f}")

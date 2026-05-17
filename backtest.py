@@ -79,10 +79,10 @@ def run_backtest():
     while not done:
         action = actor_critic.act(state, noise_std=0.0)
         next_state, reward, done, _ = test_env.step(action)
-        # Record date of the step (the date of the return we just used)
-        if test_env.current_step - 1 < len(test_returns):
-            date = test_returns.index[test_env.current_step - 1]
-            dates.append(date)
+        # Record date of the return used
+        idx = test_env.current_step - 1
+        if idx < len(test_returns):
+            dates.append(test_returns.index[idx])
         portfolio_returns.append(reward)
         state = next_state
     

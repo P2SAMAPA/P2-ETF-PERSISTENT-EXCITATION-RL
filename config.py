@@ -26,6 +26,9 @@ UNIVERSES = {
 }
 ACTIVE_UNIVERSE = "COMBINED"
 
+# --- Macro Features (available in dataset) ---
+MACRO_COLS = ["VIX", "DXY", "T10Y2Y", "TBILL_3M"]
+
 # --- RL Hyperparameters ---
 STATE_DIM = 64           # feature dimension (from returns + macro)
 ACTION_DIM = None        # set automatically = number of assets
@@ -33,20 +36,20 @@ HIDDEN_DIM = 128
 ACTOR_LR = 1e-4
 CRITIC_LR = 1e-3
 GAMMA = 0.99
-TAU = 0.005              # target network soft update
+TAU = 0.005
 
 # --- Persistent Excitation ---
-PE_LAMBDA_MIN = 0.01     # minimum eigenvalue of regression matrix (Fisher info)
-PE_NOISE_STD = 0.01      # base exploration noise
-PE_ADAPTIVE = True       # adapt noise to maintain lambda_min
-PE_COV_WINDOW = 1000     # rolling window for feature covariance
+PE_LAMBDA_MIN = 0.01
+PE_NOISE_STD = 0.01
+PE_ADAPTIVE = True
+PE_COV_WINDOW = 1000
 
 # --- Lyapunov ---
-LYAPUNOV_BETA = 0.95     # decay rate for Lyapunov certificate
-LYAPUNOV_THRESHOLD = 1.0 # stability threshold
+LYAPUNOV_BETA = 0.95
+LYAPUNOV_THRESHOLD = 1.0
 
 # --- Online Training ---
-TRAIN_EPOCHS = 10        # passes over each daily batch
+TRAIN_EPOCHS = 10
 BATCH_SIZE = 32
 REPLAY_BUFFER_SIZE = 10000
 

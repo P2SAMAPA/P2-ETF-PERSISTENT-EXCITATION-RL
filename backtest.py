@@ -4,46 +4,56 @@ from data_manager import DataManager
 from pe_actor_critic import PE_ActorCritic
 from persistent_excitation import PersistentExcitation
 from lyapunov import LyapunovMonitor
-from config import UNIVERSES, ACTIVE_UNIVERSE, STATE_DIM, TRAIN_START_DATE, TRAIN_END_DATE, TEST_START_DATE
+from train_online import online_training
+from config import UNIVERSES, ACTIVE_UNIVERSE, STATE_DIM, TRAIN_START_DATE, TRAIN_END_DATE, TEST_START_DATE, MACRO_COLS
 
 class TradingEnv:
-    def __init__(self, returns_df, start_idx, end_idx, initial_capital=1.0):
+    def __init__(self, returns_df, start_idx, end_idx, dm, lookback=20, initial_capital=1.0):
         self.returns = returns_df
         self.start_idx = start_idx
         self.end_idx = end_idx
         self.initial_capital = initial_capital
         self.current_step = start_idx
         self.capital = initial_capital
-        self.portfolio = None  # weights
+        self.dm = dm
+        self.lookback = lookback
         self.action_dim = returns_df.shape[1]
     
     def reset(self):
         self.current_step = self.start_idx
         self.capital = self.initial_capital
-        self.portfolio = np.ones(self.action_dim) / self.action_dim
         return self._get_state()
     
     def _get_state(self):
-        # Simplified state: last 20 returns + macro (if available) + time
-        # For brevity, use random; in practice call DataManager.get_state
-        return np.random.randn(STATE_DIM).astype(np.float32)
+        # Get actual state from DataManager
+        if self.current_step >= len(self.returns):
+            return np.zeros(STATE_DIM, dtype=np.float32)
+        date = self.returns.index[self.current_step]
+        state = self.dm.get_state(date, lookback=self.lookback)
+        # Ensure state vector matches STATE_DIM (pad or truncate)
+        if len(state) > STATE_DIM:
+            state = state[:STATE_DIM]
+        elif len(state) < STATE_DIM:
+            state = np.pad(state, (0, STATE_DIM - len(state)))
+        return state.astype(np.float32)
     
     def step(self, action):
         # Action is portfolio weights (softmax or clip)
         weights = np.clip(action, 0, 1)
-        weights /= weights.sum()
+        if weights.sum() > 0:
+            weights /= weights.sum()
+        else:
+            weights = np.ones(self.action_dim) / self.action_dim
+        if self.current_step >= len(self.returns):
+            return self._get_state(), 0.0, True, {}
         ret = self.returns.iloc[self.current_step].values
         port_ret = np.dot(weights, ret)
         self.capital *= (1 + port_ret)
         self.current_step += 1
         done = self.current_step >= self.end_idx
         reward = port_ret
-        next_state = self._get_state() if not done else None
+        next_state = self._get_state() if not done else np.zeros(STATE_DIM, dtype=np.float32)
         return next_state, reward, done, {}
-    
-    def get_weights_history(self):
-        # Not implemented fully; for backtest we record actions.
-        pass
 
 def run_backtest():
     tickers = UNIVERSES[ACTIVE_UNIVERSE]
@@ -55,7 +65,7 @@ def run_backtest():
     test_returns = returns.loc[TEST_START_DATE:] if TEST_START_DATE else returns.iloc[-252:]
     
     # Build training environment
-    train_env = TradingEnv(train_returns, 0, len(train_returns)-1)
+    train_env = TradingEnv(train_returns, lookback=20, start_idx=20, end_idx=len(train_returns)-1, dm=dm)
     action_dim = len(tickers)
     actor_critic = PE_ActorCritic(STATE_DIM, action_dim)
     pe = PersistentExcitation(STATE_DIM + action_dim, lambda_min=0.01, window=1000)
@@ -65,7 +75,7 @@ def run_backtest():
     online_training(train_env, actor_critic, pe, lyap, epochs=10, batch_size=32)
     
     # Backtest on test period
-    test_env = TradingEnv(test_returns, 0, len(test_returns)-1)
+    test_env = TradingEnv(test_returns, lookback=20, start_idx=20, end_idx=len(test_returns)-1, dm=dm)
     state = test_env.reset()
     done = False
     portfolio_returns = []

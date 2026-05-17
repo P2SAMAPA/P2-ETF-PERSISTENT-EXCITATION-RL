@@ -3,45 +3,51 @@ from collections import deque
 
 class PersistentExcitation:
     """
-    Maintains a rolling covariance matrix of feature vectors (e.g., state-action pairs)
-    and adjusts exploration noise to keep the smallest eigenvalue above lambda_min.
+    Maintains a rolling covariance matrix of feature vectors and adjusts exploration noise.
+    Uses Welford's online algorithm for numerical stability.
     """
     def __init__(self, feature_dim, lambda_min=0.01, window=1000):
         self.feature_dim = feature_dim
         self.lambda_min = lambda_min
         self.window = window
         self.buffer = deque(maxlen=window)
-        self.cov = np.eye(feature_dim) * 1e-6
-        self.mean = np.zeros(feature_dim)
+        # For incremental mean and covariance using Welford
         self.n = 0
+        self.mean = np.zeros(feature_dim)
+        self.M2 = np.zeros((feature_dim, feature_dim))  # sum of outer deviations
     
     def update(self, feature_vector):
-        """Add new feature vector (e.g., concatenated state and action)."""
+        """Add new feature vector using Welford's algorithm."""
         self.buffer.append(feature_vector)
-        # Incremental covariance update
-        if self.n == 0:
-            self.mean = feature_vector.copy()
-            self.cov = np.zeros((self.feature_dim, self.feature_dim))
-        else:
-            old_mean = self.mean.copy()
-            self.mean = (self.mean * self.n + feature_vector) / (self.n + 1)
-            self.cov = ((self.cov * self.n) + 
-                        np.outer(feature_vector - old_mean, feature_vector - self.mean))
         self.n = min(self.n + 1, self.window)
+        if self.n == 1:
+            self.mean = feature_vector.copy()
+            self.M2 = np.zeros((self.feature_dim, self.feature_dim))
+        else:
+            delta = feature_vector - self.mean
+            self.mean += delta / self.n
+            delta2 = feature_vector - self.mean
+            self.M2 += np.outer(delta, delta2)
     
     def get_min_eigenvalue(self):
-        if self.n < self.feature_dim:
+        """Return minimum eigenvalue of sample covariance (regularized)."""
+        if self.n < self.feature_dim + 1:
             return 0.0
-        # Use sample covariance (unbiased)
-        sample_cov = self.cov / (self.n - 1) if self.n > 1 else self.cov
-        eigvals = np.linalg.eigvalsh(sample_cov)
-        return np.maximum(eigvals.min(), 0.0)
+        # Compute sample covariance: M2 / (n - 1)
+        cov = self.M2 / (self.n - 1)
+        # Add small regularization to avoid singular/ill-conditioned matrix
+        reg = 1e-6 * np.trace(cov) / self.feature_dim
+        cov_reg = cov + reg * np.eye(self.feature_dim)
+        try:
+            eigvals = np.linalg.eigvalsh(cov_reg)
+            return max(eigvals.min(), 0.0)
+        except np.linalg.LinAlgError:
+            return 0.0
     
     def required_noise_std(self):
-        """Return noise standard deviation needed to keep lambda_min >= target."""
+        """Return noise standard deviation needed to maintain PE."""
         current_min = self.get_min_eigenvalue()
         if current_min >= self.lambda_min:
             return 0.0
-        # Heuristic: increase noise to raise eigenvalue (very simplified)
-        # In practice, one would add noise to actions/parameters.
-        return np.sqrt(max(0, self.lambda_min - current_min))
+        # Heuristic: required noise magnitude (simplified)
+        return min(1.0, np.sqrt(max(0, self.lambda_min - current_min)))

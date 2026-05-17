@@ -7,151 +7,84 @@ from huggingface_hub import HfApi, hf_hub_download
 import re
 from config import HF_OUTPUT_REPO, UNIVERSES, HF_TOKEN
 
-st.set_page_config(layout="wide", page_title="PE-RL Trading Dashboard")
-st.title("⚡ Persistent Excitation RL – Online Actor‑Critic")
-st.markdown("Adaptive control with persistent excitation for ETF portfolio trading")
+st.set_page_config(layout="wide", page_title="PE-RL ETF Dashboard")
+st.title("⚡ Persistent Excitation RL – ETF Return Rankings")
+st.markdown("Top ETFs by annualised return for each universe")
 
 # ---------------------------
-# Load data from HF
+# Load data from HF (optional – we may not need strategy results)
+# But we keep for reference; the main display uses live DataManager
 # ---------------------------
 @st.cache_data(ttl=3600)
-def get_latest_run_folder():
-    if not HF_TOKEN:
-        return None
-    api = HfApi()
-    try:
-        files = api.list_repo_files(repo_id=HF_OUTPUT_REPO, repo_type="dataset", token=HF_TOKEN)
-        run_folders = set()
-        for f in files:
-            match = re.match(r"(\d{8}_\d{6})/", f)
-            if match:
-                run_folders.add(match.group(1))
-        if not run_folders:
-            return None
-        return sorted(run_folders, reverse=True)[0]
-    except:
-        return None
-
-@st.cache_data
-def load_performance(run_folder):
-    try:
-        cum = pd.read_parquet(
-            hf_hub_download(repo_id=HF_OUTPUT_REPO, filename=f"{run_folder}/cumulative_returns.parquet", 
-                            repo_type="dataset", token=HF_TOKEN)
-        )
-        daily = pd.read_parquet(
-            hf_hub_download(repo_id=HF_OUTPUT_REPO, filename=f"{run_folder}/daily_returns.parquet", 
-                            repo_type="dataset", token=HF_TOKEN)
-        )
-        # Convert to Series if DataFrame
-        if isinstance(cum, pd.DataFrame):
-            cum = cum.iloc[:, 0]
-        if isinstance(daily, pd.DataFrame):
-            daily = daily.iloc[:, 0]
-        return cum, daily
-    except Exception as e:
-        st.warning(f"Could not load performance data: {e}")
-        return None, None
-
-@st.cache_data
-def compute_etf_stats(universe_name, tickers):
+def compute_etf_stats(tickers):
+    """Compute annual return and volatility for each ETF."""
     from data_manager import DataManager
     dm = DataManager(tickers)
     rets = dm.returns
-    mean_ret = rets.mean() * 252
-    vol = rets.std() * np.sqrt(252)
-    sharpe = mean_ret / vol
-    stats = pd.DataFrame({"Sharpe": sharpe, "Volatility": vol, "MeanReturn": mean_ret})
-    return stats.sort_values("Sharpe", ascending=False)
-
-def max_drawdown(cum_series):
-    """Return max drawdown as a float."""
-    if cum_series is None or len(cum_series) == 0:
-        return 0.0
-    cum_series = cum_series.copy()
-    cum_series = cum_series / cum_series.iloc[0]
-    running_max = cum_series.cummax()
-    drawdown = (cum_series - running_max) / running_max
-    result = drawdown.min()
-    # Ensure scalar
-    if isinstance(result, pd.Series):
-        result = result.iloc[0]
-    if np.isnan(result):
-        result = 0.0
-    return float(result)
-
-def plot_cumulative(cum_series, title):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=cum_series.index, y=cum_series.values, mode='lines', name='RL Strategy'))
-    fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Cumulative Return", yaxis_type="log")
-    return fig
+    # Annualised metrics (252 trading days)
+    ann_return = rets.mean() * 252
+    ann_vol = rets.std() * np.sqrt(252)
+    sharpe = ann_return / ann_vol
+    stats = pd.DataFrame({
+        "Annual Return (%)": ann_return * 100,
+        "Annual Volatility (%)": ann_vol * 100,
+        "Sharpe Ratio": sharpe
+    }).sort_values("Annual Return (%)", ascending=False)
+    return stats
 
 # ---------------------------
-# Sidebar
+# Sidebar universe selection
 # ---------------------------
 st.sidebar.header("Configuration")
 selected_universe = st.sidebar.selectbox("Select Universe", list(UNIVERSES.keys()))
 tickers = UNIVERSES[selected_universe]
 
-run_folder = get_latest_run_folder()
-if run_folder is None:
-    st.error("No results found. Please run the backtest first.")
-    st.stop()
-
-cum, daily = load_performance(run_folder)
-if cum is None:
-    st.error("Could not load performance data from HF.")
-    st.stop()
-
-# Ensure datetime index
-cum.index = pd.to_datetime(cum.index)
-daily.index = pd.to_datetime(daily.index)
+# Compute stats
+with st.spinner(f"Loading ETF data for {selected_universe}..."):
+    etf_stats = compute_etf_stats(tickers)
 
 # ---------------------------
-# Main dashboard
+# Top 3 Hero Cards (by Annual Return)
 # ---------------------------
-st.header(f"Universe: {selected_universe}")
-
-# Performance metrics
-strat_ret = float(cum.iloc[-1] - 1)
-strat_sharpe = float(daily.mean() / daily.std() * np.sqrt(252)) if daily.std() != 0 else 0.0
-strat_mdd = max_drawdown(cum)
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Strategy Total Return", f"{strat_ret:.2%}")
-col2.metric("Sharpe Ratio", f"{strat_sharpe:.2f}")
-col3.metric("Max Drawdown", f"{strat_mdd:.2%}")
-
-st.plotly_chart(plot_cumulative(cum, "Cumulative Strategy Returns"), use_container_width=True)
-
-# ETF analysis
-st.subheader("ETF Performance & Top Picks")
-with st.spinner("Computing ETF statistics..."):
-    etf_stats = compute_etf_stats(selected_universe, tickers)
-
+st.subheader(f"🏆 Top 3 ETFs in {selected_universe} by Annual Return")
 top3 = etf_stats.head(3)
-st.markdown("#### 🏆 Top 3 ETFs by Sharpe Ratio")
-st.dataframe(top3[["Sharpe", "Volatility", "MeanReturn"]].style.format("{:.2f}"))
 
-other_etfs = [t for t in tickers if t not in top3.index]
-if other_etfs:
-    selected_etf = st.selectbox("Select any other ETF to view its performance", other_etfs)
-    etf_data = compute_etf_stats(selected_universe, [selected_etf])
-    st.metric(f"{selected_etf} Sharpe Ratio", f"{etf_data.loc[selected_etf, 'Sharpe']:.2f}")
-    from data_manager import DataManager
-    dm = DataManager([selected_etf])
-    prices = dm.df[selected_etf].dropna()
-    if not prices.empty:
-        fig_etf = go.Figure()
-        fig_etf.add_trace(go.Scatter(x=prices.index, y=prices / prices.iloc[0], mode='lines', name=selected_etf))
-        fig_etf.update_layout(title=f"{selected_etf} Cumulative Price", xaxis_title="Date")
-        st.plotly_chart(fig_etf, use_container_width=True)
+cols = st.columns(3)
+for i, (ticker, row) in enumerate(top3.iterrows()):
+    with cols[i]:
+        st.metric(
+            label=f"{ticker}",
+            value=f"{row['Annual Return (%)']:.2f}%",
+            delta=f"Vol: {row['Annual Volatility (%)']:.2f}%"
+        )
 
-with st.expander("Full ETF Universe Table (sorted by Sharpe)"):
-    st.dataframe(etf_stats.style.format("{:.3f}"))
+# ---------------------------
+# Dropdown for all ETFs (full list)
+# ---------------------------
+st.subheader("🔍 Explore Any ETF")
+selected_etf = st.selectbox("Choose an ETF", tickers)
 
-st.subheader("Strategy Daily Returns Distribution")
-fig_hist = px.histogram(daily, x=daily.values, nbins=50, title="Daily Returns")
-st.plotly_chart(fig_hist, use_container_width=True)
+# Display selected ETF stats
+etf_row = etf_stats.loc[selected_etf]
+col1, col2, col3 = st.columns(3)
+col1.metric("Annual Return", f"{etf_row['Annual Return (%)']:.2f}%")
+col2.metric("Annual Volatility", f"{etf_row['Annual Volatility (%)']:.2f}%")
+col3.metric("Sharpe Ratio", f"{etf_row['Sharpe Ratio']:.3f}")
 
-st.caption("Data loaded from Hugging Face. Top ETFs by Sharpe ratio are based on historical returns (2008–present).")
+# Plot price chart for selected ETF
+from data_manager import DataManager
+dm = DataManager([selected_etf])
+prices = dm.df[selected_etf].dropna()
+if not prices.empty:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=prices.index, y=prices / prices.iloc[0], mode='lines', name=selected_etf))
+    fig.update_layout(title=f"{selected_etf} Normalised Price", xaxis_title="Date", yaxis_title="Price (starting at 1)")
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------------------
+# Expandable full table
+# ---------------------------
+with st.expander("📊 Full Universe Table (sorted by Annual Return)"):
+    st.dataframe(etf_stats.style.format("{:.2f}"))
+
+st.caption("Annualised returns based on daily data from 2008 to present. No strategy performance shown – only ETF rankings.")

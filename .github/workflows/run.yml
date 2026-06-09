@@ -2,7 +2,7 @@ name: Run PE-RL Backtest
 
 on:
   schedule:
-    - cron: '45 00 * * 1-6'
+    - cron: '45 03 * * 1-6'
   workflow_dispatch:
 
 jobs:
